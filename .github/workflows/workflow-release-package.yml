@@ -1,0 +1,143 @@
+name: Release ET Algorithms
+
+on:
+  repository_dispatch:
+    types: [trigger-release]
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+
+  check-runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      runner-label: ${{ steps.set-runner.outputs.label }}
+    steps:
+
+      # Set runner
+      - name: Set runner
+        id: set-runner
+        run: |
+          runners=$(curl -s -H "Accept: application/vnd.github+json" -H "Authorization: token ${{ secrets.REPO_ACCESS_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/actions/runners")
+          available=$(echo "$runners" | jq '.runners[] | select(.status == "online" and .busy == false and .labels[] .name == "self-hosted")')
+
+          if [ -n "$available" ]; then
+            echo "label=self-hosted" >> $GITHUB_OUTPUT
+          else
+            echo "label=macos-13" >> $GITHUB_OUTPUT
+          fi
+
+  build-and-release:
+    needs: check-runner
+    runs-on: ${{ needs.check-runner.outputs.runner-label }}
+    timeout-minutes: 10
+    steps:
+
+      # Checkout SPM ET Algorithms Repository
+      - name: Checkout SPM ET Algorithms Repository
+        uses: actions/checkout@v4
+        with:
+          path: 'spm-et-algorithms'
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: 'main'
+
+      # Checkout ETAlgorithms Repository
+      - name: Checkout ETAlgorithms Repository
+        uses: actions/checkout@v4
+        with:
+          repository: 'StefaniOSApps/energy-tracker-algorithms-ios'
+          path: 'energy-tracker-algorithms-ios'
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: 'main'
+
+      # Build xcframework
+      - name: Build xcframework
+        run: |
+            cd energy-tracker-algorithms-ios
+            make framework
+
+      # Get latest tag and increment version
+      - name: Get latest tag and increment version
+        id: versioning
+        run: |
+          cd spm-et-algorithms
+          # Fetch all tags to ensure we have the latest tag information
+          git fetch --tags
+
+          # Get the latest tag
+          LATEST_TAG=$(git describe --tags `git rev-list --tags --max-count=1`)
+
+          # Assuming a tag format like v1.0.0
+          MAJOR=$(echo $LATEST_TAG | cut -d '.' -f 1 | sed 's/v//')
+          MINOR=$(echo $LATEST_TAG | cut -d '.' -f 2)
+          PATCH=$(echo $LATEST_TAG | cut -d '.' -f 3)
+
+          # Increment the Minor version
+          NEW_MINOR=$((MINOR+1))
+
+          # Construct the new tag
+          NEW_TAG="${MAJOR}.${NEW_MINOR}.${PATCH}"
+
+          # Set the new tag for later steps
+          echo "tag=$NEW_TAG" >> $GITHUB_ENV
+
+      # Zip xcframework
+      - name: Zip xcframework
+        run: |
+          cd energy-tracker-algorithms-ios/Distribution
+          zip -r "ETAlgorithms.xcframework-${{ env.tag }}.zip" ETAlgorithms.xcframework
+      
+      # Calculate checksum of the xcframework zip
+      - name: Calculate checksum
+        run: |
+          cd energy-tracker-algorithms-ios/Distribution
+          CHECKSUM=$(shasum -a 256 "ETAlgorithms.xcframework-${{ env.tag }}.zip" | cut -d ' ' -f 1)
+
+          # Set the checksum for later steps
+          echo "checksum=$CHECKSUM" >> $GITHUB_ENV
+
+      # Create Package.swift
+      - name: Create Package.swift
+        run: |
+          cd spm-et-algorithms
+
+          if [ -f "Package.swift" ]; then
+            git rm Package.swift
+          fi
+
+          ./.github/scripts/generate-package-swift.sh
+
+          git add Package.swift
+          git commit -m "Update Package.swift to new version"
+          git push
+        env:
+          XC_FRAMEWORK_URL: "https://github.com/StefaniOSApps/spm-et-algorithms/releases/download/${{ env.tag }}/ETAlgorithms.xcframework-${{ env.tag }}.zip"
+          XC_FRAMEWORK_CHECKSUM: ${{ env.checksum }}
+
+      # Tagging in both repositories
+      - name: Tagging repositories
+        run: |
+          # Tagging the spm-et-algorithms repository
+          cd spm-et-algorithms
+          git tag ${{ env.tag }}
+          git push origin ${{ env.tag }}
+
+          # Tagging the energy-tracker-algorithms-ios repository
+          cd ../energy-tracker-algorithms-ios
+          git tag ${{ env.tag }}
+          git push origin ${{ env.tag }}
+
+      # Create Release and upload xcframework zip
+      - name: Create Release and upload xcframework
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "energy-tracker-algorithms-ios/Distribution/ETAlgorithms.xcframework-${{ env.tag }}.zip"
+          body: 'Release of ETAlgorithms xcframework version ${{ env.tag }}'
+          tag: ${{ env.tag }}
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          name: "Release ${{ env.tag }}"
+          draft: false
+          prerelease: false
