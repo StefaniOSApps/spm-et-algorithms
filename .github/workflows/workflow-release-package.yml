@@ -57,6 +57,7 @@ jobs:
       - name: Build xcframework
         run: |
             cd energy-tracker-algorithms-ios
+            make setup
             make framework
 
       # Get latest tag and increment version
