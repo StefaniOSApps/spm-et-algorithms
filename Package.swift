@@ -13,8 +13,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "ETAlgorithmsTarget",
-            url: "https://github.com/StefaniOSApps/spm-et-algorithms/releases/download/1.76.0/ETAlgorithms.xcframework-1.76.0.zip",
-            checksum: "69ee81f2608af3a0a70e82918c24a788615148ac7ebf1ebf85e9f0732c79aa85"
+            url: "https://github.com/StefaniOSApps/spm-et-algorithms/releases/download/1.77.0/ETAlgorithms.xcframework-1.77.0.zip",
+            checksum: "ec00eee0d58af360d3501fd809806af61002e9bee6e429c4e688cce739be5b85"
         )
     ]
 )
